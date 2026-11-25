@@ -3,6 +3,7 @@
 //! Layout, from the database outward:
 //!
 //! - `backend` — one module per database, all behind the `Backend` trait.
+//! - `config`  — the user's connections.
 //! - `guard`   — classifies SQL so read-only mode can refuse non-reads.
 //! - `exec`    — the single path by which SQL reaches a backend.
 //! - `worker`  — runs backend calls on a thread so the UI never waits.
@@ -12,6 +13,7 @@
 //! backend without passing the guard.
 
 pub mod backend;
+pub mod config;
 pub mod exec;
 pub mod guard;
 pub mod tui;

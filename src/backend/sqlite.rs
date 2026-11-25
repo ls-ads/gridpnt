@@ -10,16 +10,20 @@
 //!    read-only?" test before it runs.
 
 use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags};
 
-use super::{Backend, Cancel, CatalogNode, NodeKind, Result, ResultSet, Value};
+use super::{Backend, Cancel, CatalogNode, Limits, NodeKind, Result, ResultSet, Value};
 
 pub struct Sqlite {
     conn: Connection,
     label: String,
+    /// When the running query must stop. SQLite checks this as it works.
+    deadline: Arc<Mutex<Option<Instant>>>,
 }
 
 impl Sqlite {
@@ -41,12 +45,22 @@ impl Sqlite {
         conn.authorizer(Some(allow_reads_only))
             .map_err(|e| format!("cannot install read-only checks: {e}"))?;
 
+        // SQLite calls this every few thousand steps of a query; returning
+        // true stops the query. This is how the timeout is enforced.
+        let deadline: Arc<Mutex<Option<Instant>>> = Arc::default();
+        let watched = Arc::clone(&deadline);
+        conn.progress_handler(
+            10_000,
+            Some(move || watched.lock().unwrap().is_some_and(|at| Instant::now() >= at)),
+        )
+        .map_err(|e| format!("cannot install the query timeout: {e}"))?;
+
         let label = path
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.display().to_string());
 
-        Ok(Sqlite { conn, label })
+        Ok(Sqlite { conn, label, deadline })
     }
 
     fn tables_and_views(&self) -> rusqlite::Result<Vec<CatalogNode>> {
@@ -119,7 +133,30 @@ impl Backend for Sqlite {
         }
     }
 
-    fn query(&mut self, sql: &str, row_cap: usize) -> Result<ResultSet> {
+    fn query(&mut self, sql: &str, limits: &Limits) -> Result<ResultSet> {
+        let deadline = Instant::now() + limits.timeout;
+        *self.deadline.lock().unwrap() = Some(deadline);
+        let outcome = self.query_until_done(sql, limits.row_cap);
+        *self.deadline.lock().unwrap() = None;
+
+        // A timeout stops the query the same way a cancel does; the clock
+        // tells the two apart.
+        match outcome {
+            Err(error) if error == "cancelled" && Instant::now() >= deadline => {
+                Err(format!("timed out after {} s", limits.timeout.as_secs()))
+            }
+            other => other,
+        }
+    }
+
+    fn canceller(&self) -> Cancel {
+        let handle = self.conn.get_interrupt_handle();
+        Box::new(move || handle.interrupt())
+    }
+}
+
+impl Sqlite {
+    fn query_until_done(&mut self, sql: &str, row_cap: usize) -> Result<ResultSet> {
         let mut stmt = self.conn.prepare(sql).map_err(readable)?;
 
         if !stmt.readonly() {
@@ -151,11 +188,6 @@ impl Backend for Sqlite {
             result.rows.push(cells);
         }
         Ok(result)
-    }
-
-    fn canceller(&self) -> Cancel {
-        let handle = self.conn.get_interrupt_handle();
-        Box::new(move || handle.interrupt())
     }
 }
 

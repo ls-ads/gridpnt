@@ -137,11 +137,11 @@ fn sqlite_itself_refuses_writes_without_the_guard() {
         "VACUUM",
         "ATTACH DATABASE ':memory:' AS other",
     ] {
-        assert!(sqlite.query(sql, 10).is_err(), "sqlite ran: {sql}");
+        assert!(sqlite.query(sql, &exec::LIMITS).is_err(), "sqlite ran: {sql}");
     }
 
     // Turning query_only off must not have worked either.
-    assert!(sqlite.query("DELETE FROM people", 10).is_err());
+    assert!(sqlite.query("DELETE FROM people", &exec::LIMITS).is_err());
     assert_eq!(row_count(&db, "people"), 3);
 }
 
@@ -162,5 +162,19 @@ fn a_running_query_can_be_cancelled() {
 
     assert_eq!(outcome.unwrap_err(), "cancelled");
     // The connection is still usable afterwards.
+    assert!(exec::run(&mut sqlite, "SELECT 1").is_ok());
+}
+
+#[test]
+fn a_query_that_runs_too_long_is_stopped() {
+    let db = TempDb::new(0);
+    let mut sqlite = Sqlite::open(&db.path).unwrap();
+    let limits = gridpnt::backend::Limits {
+        row_cap: 10,
+        timeout: std::time::Duration::from_millis(200),
+    };
+    let endless = "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n) SELECT count(*) FROM n";
+    let error = exec::run_within(&mut sqlite, endless, &limits).unwrap_err();
+    assert!(error.starts_with("timed out"), "{error}");
     assert!(exec::run(&mut sqlite, "SELECT 1").is_ok());
 }

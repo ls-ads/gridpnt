@@ -180,6 +180,7 @@ fn cell(value: &Value) -> (String, bool, Style) {
         Value::Null => ("NULL".into(), false, dim),
         Value::Integer(n) => (n.to_string(), true, number),
         Value::Real(x) => (format!("{x:?}"), true, number),
+        Value::Decimal(digits) => (text::clean(digits, MAX_COLUMN_WIDTH + 1), true, number),
         Value::Text(s) => (
             text::clean(s, MAX_COLUMN_WIDTH + 1),
             false,

@@ -29,7 +29,7 @@ impl Session {
         let db = TempDb::new(rows);
         let sqlite = Sqlite::open(&db.path).unwrap();
         let mut session = Session {
-            app: App::new(sqlite.label()),
+            app: App::new(sqlite.label(), None),
             sqlite,
             terminal: Terminal::new(TestBackend::new(100, 20)).unwrap(),
             _db: db,

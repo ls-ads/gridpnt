@@ -35,6 +35,8 @@ enum Pending {
 pub struct App {
     /// Connection name shown in the status line.
     label: String,
+    /// Environment label such as `prod`, always shown. (SAFE-007)
+    env: Option<String>,
     focus: Focus,
     catalog: Catalog,
     grid: Grid,
@@ -56,9 +58,10 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(label: String) -> Self {
+    pub fn new(label: String, env: Option<String>) -> Self {
         App {
             label,
+            env,
             focus: Focus::Catalog,
             catalog: Catalog::default(),
             grid: Grid::default(),
@@ -298,6 +301,15 @@ impl App {
             .bg(theme::GREEN)
             .add_modifier(Modifier::BOLD);
         let (x, _) = buf.set_stringn(area.x, area.y, " READ-ONLY ", width, badge);
+        let mut x = x;
+        if let Some(env) = &self.env {
+            // Production is red so it cannot be mistaken for anything else.
+            let is_prod = matches!(env.to_lowercase().as_str(), "prod" | "production");
+            let colour = if is_prod { theme::RED } else { theme::BLUE };
+            let style = Style::new().fg(theme::CRUST).bg(colour).add_modifier(Modifier::BOLD);
+            let badge = format!(" {} ", text::clean(env, 20).to_uppercase());
+            (x, _) = buf.set_stringn(x, area.y, badge, width, style);
+        }
         let label = format!(" {} ", text::clean(&self.label, 60));
         let (x, _) = buf.set_stringn(x, area.y, label, width, Style::new().fg(theme::SUBTEXT));
 

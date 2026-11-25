@@ -162,6 +162,8 @@ impl Catalog {
             };
             let indent = "  ".repeat(row.path.len() - 1);
             let name_style = match row.node.kind {
+                NodeKind::Catalog => Style::new().fg(theme::MAUVE).add_modifier(Modifier::BOLD),
+                NodeKind::Schema => Style::new().fg(theme::PEACH),
                 NodeKind::Table => Style::new().fg(theme::BLUE).add_modifier(Modifier::BOLD),
                 NodeKind::View => Style::new().fg(theme::TEAL).add_modifier(Modifier::BOLD),
                 NodeKind::Column => Style::new().fg(theme::TEXT),

@@ -1,7 +1,10 @@
 //! What every database must provide. One module per database implements
 //! `Backend`; nothing outside that module knows which database it is.
 
+pub mod databricks;
 pub mod sqlite;
+
+use std::time::Duration;
 
 /// One cell of a result.
 #[derive(Debug, Clone, PartialEq)]
@@ -9,6 +12,8 @@ pub enum Value {
     Null,
     Integer(i64),
     Real(f64),
+    /// An exact decimal number, kept as the text the database sent.
+    Decimal(String),
     Text(String),
     /// Binary data is not loaded; only its size in bytes is kept.
     Blob(usize),
@@ -25,6 +30,8 @@ pub struct ResultSet {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeKind {
+    Catalog,
+    Schema,
     Table,
     View,
     Column,
@@ -38,6 +45,15 @@ pub struct CatalogNode {
     /// Short extra text shown beside the name, such as a column's type.
     pub detail: String,
     pub has_children: bool,
+}
+
+/// The limits every query runs under.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Limits {
+    /// Most rows kept. More than this and the result is marked truncated.
+    pub row_cap: usize,
+    /// Longest a query may run before it is cancelled.
+    pub timeout: Duration,
 }
 
 /// Stops whatever the backend is currently running. Safe to call from any
@@ -60,12 +76,12 @@ pub trait Backend: Send {
     /// something with rows.
     fn preview_sql(&self, path: &[String]) -> Option<String>;
 
-    /// Run one statement and return at most `row_cap` rows.
+    /// Run one statement within `limits`.
     ///
     /// Callers must go through `exec::run`, which applies the guard first.
     /// A backend must also enforce read-only itself wherever the database
     /// allows it, so the guard is never the only barrier.
-    fn query(&mut self, sql: &str, row_cap: usize) -> Result<ResultSet>;
+    fn query(&mut self, sql: &str, limits: &Limits) -> Result<ResultSet>;
 
     /// A handle that cancels a running `query` from another thread.
     fn canceller(&self) -> Cancel;

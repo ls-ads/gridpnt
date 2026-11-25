@@ -29,8 +29,9 @@ enum Message {
 }
 
 /// Run the interface until the user quits.
-pub fn run(backend: Box<dyn Backend>) -> io::Result<()> {
-    let mut app = App::new(backend.label());
+/// `env` is the connection's environment label, if it has one.
+pub fn run(backend: Box<dyn Backend>, env: Option<String>) -> io::Result<()> {
+    let mut app = App::new(backend.label(), env);
     let (sender, inbox) = mpsc::channel::<Message>();
 
     let worker = {
