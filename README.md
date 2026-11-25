@@ -5,3 +5,7 @@ A terminal-native database tool. Keyboard only. One binary.
 Early development — nothing to install yet.
 
 A [datapnt.com](https://datapnt.com) project.
+
+## License
+
+GPL-3.0-only. See [LICENSE](LICENSE).
