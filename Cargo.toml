@@ -1,0 +1,22 @@
+[package]
+name = "gridpnt"
+version = "0.1.0"
+edition = "2024"
+description = "A terminal-native database tool. Keyboard only. One binary."
+license = "GPL-3.0-only"
+repository = "https://github.com/ls-ads/gridpnt"
+homepage = "https://datapnt.com"
+
+[dependencies]
+ratatui = "0.30"
+rusqlite = { version = "0.43", features = ["bundled", "hooks"] }
+unicode-width = "0.2"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

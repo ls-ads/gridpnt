@@ -17,3 +17,11 @@ order. If it does not exist, stop and ask — do not guess at requirements.
 - Adding a dependency requires a written justification in the spec first.
 - Code is written to be read by a person: small modules, plain names, comments
   that explain why.
+
+## Commands
+
+- `cargo test` — all tests. `tests/guard_corpus.rs` is the safety corpus;
+  add the failing case there before changing `src/guard.rs`.
+- `cargo fmt && cargo clippy --all-targets -- -D warnings` — must be clean
+  before committing; CI enforces both on Linux, macOS, and Windows.
+- `src/lib.rs` describes the module layout and its two rules.
