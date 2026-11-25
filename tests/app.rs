@@ -46,7 +46,7 @@ impl Session {
                 elapsed: Duration::from_millis(7),
             };
             let response = match request {
-                Request::Children { path } => {
+                Request::Children { path, .. } => {
                     let result = self.sqlite.children(&path);
                     Response::Children { path, result }
                 }
@@ -222,4 +222,89 @@ fn q_quits() {
     assert!(!s.app.quit);
     s.keys("q");
     assert!(s.app.quit);
+}
+
+#[test]
+fn slash_searches_the_catalog_as_you_type() {
+    let mut s = Session::new(0);
+    s.keys("/peo");
+    // The cursor has already moved, before Enter.
+    s.keys("\nl");
+    assert!(s.shows("▾ people"));
+
+    // Esc puts the cursor back where the search began.
+    s.keys("gg/numb");
+    s.press(KeyCode::Esc, KeyModifiers::NONE);
+    s.keys("l");
+    assert!(s.shows("▾ adults"));
+}
+
+#[test]
+fn search_in_the_grid_finds_cells_and_n_repeats() {
+    let mut s = Session::new(0);
+    s.keys(":select name, age from people order by id\n");
+    s.keys("/8\n"); // only Grace's age, 85, contains an 8
+    assert!(s.status().contains("row 2/3 · col 2/2"));
+
+    s.keys("gg0/a\n"); // Ada, Grace: lower-case pattern ignores case
+    assert!(s.status().contains("row 1/3 · col 1/2"));
+    s.keys("n");
+    assert!(s.status().contains("row 2/3 · col 1/2"));
+    s.keys("n"); // wraps round to Ada
+    assert!(s.status().contains("row 1/3 · col 1/2"));
+    s.keys("N");
+    assert!(s.status().contains("row 2/3 · col 1/2"));
+
+    s.keys("/zzz\n");
+    assert!(s.status().contains("not found: zzz"));
+    assert!(s.status().contains("row 2/3")); // and the cursor stayed put
+}
+
+#[test]
+fn question_mark_shows_the_keys_until_any_key() {
+    let mut s = Session::new(0);
+    s.keys("?");
+    assert!(s.shows("re-read from the database"));
+    s.keys("j");
+    assert!(!s.shows("re-read from the database"));
+}
+
+#[test]
+fn enter_in_the_grid_shows_the_whole_cell() {
+    let mut s = Session::new(0);
+    let long = "x".repeat(60);
+    s.keys(&format!(":select '{long}' as v\n"));
+    assert!(!s.shows(&long)); // cut short in the grid
+    s.keys("\n");
+    assert!(s.shows(&long));
+    s.keys("q");
+    assert!(!s.shows(&long));
+    assert!(!s.app.quit); // q closed the cell view, not gridpnt
+}
+
+#[test]
+fn y_copies_cells_rows_and_names() {
+    let mut s = Session::new(0);
+    s.keys("Gy");
+    assert_eq!(s.app.take_clipboard().as_deref(), Some("people"));
+
+    s.keys(":select name, age from people order by id\n");
+    s.keys("y");
+    assert_eq!(s.app.take_clipboard().as_deref(), Some("Ada"));
+    s.keys("jY");
+    assert_eq!(s.app.take_clipboard().as_deref(), Some("Grace\t85"));
+    assert!(s.status().contains("copied 8 characters"));
+}
+
+#[test]
+fn sql_sent_from_an_editor_runs_like_typed_sql() {
+    let mut s = Session::new(0);
+    s.app.on_remote("select name from people where age > 80".into());
+    s.settle();
+    assert!(s.shows("Grace"));
+    assert!(s.status().contains("row 1/1"));
+
+    s.app.on_remote("delete from people".into());
+    s.settle();
+    assert!(s.status().contains("refused (read-only)"));
 }

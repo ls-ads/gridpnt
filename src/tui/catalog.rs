@@ -47,6 +47,43 @@ impl Catalog {
         self.move_to(usize::MAX);
     }
 
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+
+    /// The dotted name of the row under the cursor, such as
+    /// `catalog.schema.table`.
+    pub fn current_name(&self) -> Option<String> {
+        self.rows.get(self.cursor).map(|row| row.path.join("."))
+    }
+
+    /// Find the next row whose name matches `pattern`, looking forward or
+    /// backward from the cursor and wrapping round. `include_current`
+    /// decides whether the row under the cursor may itself be the answer.
+    pub fn find(&self, pattern: &str, forward: bool, include_current: bool) -> Option<usize> {
+        let count = self.rows.len();
+        let first = if include_current { 0 } else { 1 };
+        (first..count + first)
+            .map(|step| {
+                let step = if forward { step } else { count - step % count };
+                (self.cursor + step) % count
+            })
+            .find(|&index| text::matches(&self.rows[index].node.name, pattern))
+    }
+
+    /// Prepare the row under the cursor for re-reading from the database:
+    /// close it and return its path.
+    pub fn refresh_target(&mut self) -> Option<Vec<String>> {
+        let row = self.rows.get(self.cursor)?;
+        if !row.node.has_children {
+            return None;
+        }
+        if row.open {
+            self.close();
+        }
+        Some(self.rows[self.cursor].path.clone())
+    }
+
     /// Path of the row under the cursor, if it is a table or view.
     pub fn current_relation(&self) -> Option<Vec<String>> {
         let row = self.rows.get(self.cursor)?;

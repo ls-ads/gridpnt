@@ -7,12 +7,14 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::backend::{Backend, Cancel, CatalogNode, Result, ResultSet};
+use crate::cache::CatalogCache;
 use crate::exec;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Request {
-    /// Load the catalog entries under `path`.
-    Children { path: Vec<String> },
+    /// Load the catalog entries under `path`. With `refresh`, ask the
+    /// database even if the answer is remembered from before.
+    Children { path: Vec<String>, refresh: bool },
     /// Show the contents of the table or view at `path`.
     Preview { path: Vec<String> },
     /// Run SQL the user typed.
@@ -44,8 +46,9 @@ impl Worker {
         let (requests, inbox) = mpsc::channel::<Request>();
 
         thread::spawn(move || {
+            let mut cache = backend.cache_name().map(|name| CatalogCache::for_connection(&name));
             for request in inbox {
-                reply(handle(backend.as_mut(), request));
+                reply(handle(backend.as_mut(), cache.as_mut(), request));
             }
         });
 
@@ -63,10 +66,10 @@ impl Worker {
     }
 }
 
-fn handle(backend: &mut dyn Backend, request: Request) -> Response {
+fn handle(backend: &mut dyn Backend, cache: Option<&mut CatalogCache>, request: Request) -> Response {
     match request {
-        Request::Children { path } => {
-            let result = backend.children(&path);
+        Request::Children { path, refresh } => {
+            let result = children(backend, cache, &path, refresh);
             Response::Children { path, result }
         }
         Request::Preview { path } => match backend.preview_sql(&path) {
@@ -78,6 +81,24 @@ fn handle(backend: &mut dyn Backend, request: Request) -> Response {
         },
         Request::Run { sql } => run(backend, &sql),
     }
+}
+
+/// List catalog entries, from the cache when allowed and possible.
+pub fn children(
+    backend: &mut dyn Backend,
+    cache: Option<&mut CatalogCache>,
+    path: &[String],
+    refresh: bool,
+) -> Result<Vec<CatalogNode>> {
+    let Some(cache) = cache else {
+        return backend.children(path);
+    };
+    if !refresh && let Some(remembered) = cache.get(path) {
+        return Ok(remembered);
+    }
+    let fresh = backend.children(path)?;
+    cache.put(path, &fresh);
+    Ok(fresh)
 }
 
 fn run(backend: &mut dyn Backend, sql: &str) -> Response {

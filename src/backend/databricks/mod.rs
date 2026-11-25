@@ -348,6 +348,10 @@ impl Backend for Databricks {
         self.label.clone()
     }
 
+    fn cache_name(&self) -> Option<String> {
+        Some(self.label.clone())
+    }
+
     fn children(&mut self, path: &[String]) -> Result<Vec<CatalogNode>> {
         match path {
             [] => self.catalogs(),

@@ -6,6 +6,8 @@ pub mod sqlite;
 
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 /// One cell of a result.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -28,7 +30,7 @@ pub struct ResultSet {
     pub truncated: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NodeKind {
     Catalog,
     Schema,
@@ -38,7 +40,7 @@ pub enum NodeKind {
 }
 
 /// One entry in the catalog tree.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CatalogNode {
     pub name: String,
     pub kind: NodeKind,
@@ -66,6 +68,12 @@ pub type Result<T> = std::result::Result<T, String>;
 pub trait Backend: Send {
     /// A short name for this connection, shown in the status line.
     fn label(&self) -> String;
+
+    /// A name under which this connection's catalog may be remembered on
+    /// disk, or `None` if listing it is already instant.
+    fn cache_name(&self) -> Option<String> {
+        None
+    }
 
     /// The catalog entries directly under `path`. An empty path is the root.
     /// Called only when the user opens that part of the tree.

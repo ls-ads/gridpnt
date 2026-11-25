@@ -79,6 +79,51 @@ impl Grid {
         self.col = index.min(self.widths.len().saturating_sub(1));
     }
 
+    pub fn position(&self) -> (usize, usize) {
+        (self.row, self.col)
+    }
+
+    pub fn set_position(&mut self, (row, col): (usize, usize)) {
+        self.move_to_row(row);
+        self.move_to_col(col);
+    }
+
+    /// The full text of the cell under the cursor.
+    pub fn current_cell(&self) -> Option<String> {
+        let row = self.result.as_ref()?.rows.get(self.row)?;
+        Some(plain(row.get(self.col)?))
+    }
+
+    /// The row under the cursor as tab-separated text.
+    pub fn current_row(&self) -> Option<String> {
+        let row = self.result.as_ref()?.rows.get(self.row)?;
+        Some(row.iter().map(plain).collect::<Vec<_>>().join("\t"))
+    }
+
+    /// Move to the next cell containing `pattern`, reading across each row
+    /// and then down, forward or backward from the cursor, wrapping round.
+    /// Returns false, without moving, if no cell matches.
+    pub fn find(&mut self, pattern: &str, forward: bool, include_current: bool) -> bool {
+        let Some(result) = &self.result else { return false };
+        let width = result.columns.len();
+        let count = result.rows.len() * width;
+        if count == 0 {
+            return false;
+        }
+        let here = self.row * width + self.col;
+        let first = if include_current { 0 } else { 1 };
+        let found = (first..count + first)
+            .map(|step| {
+                let step = if forward { step } else { count - step % count };
+                (here + step) % count
+            })
+            .find(|&index| text::matches(&plain(&result.rows[index / width][index % width]), pattern));
+        if let Some(index) = found {
+            (self.row, self.col) = (index / width, index % width);
+        }
+        found.is_some()
+    }
+
     /// One-line summary for the status bar, and whether the result was cut
     /// off by the row cap. Truncation must never go unnoticed. (GRID-004)
     pub fn summary(&self) -> Option<(String, bool)> {
@@ -170,6 +215,18 @@ impl Grid {
 /// Total screen width of a run of columns, including the gaps between them.
 fn span(widths: &[usize]) -> usize {
     widths.iter().sum::<usize>() + GAP * widths.len().saturating_sub(1)
+}
+
+/// A value as plain text in full, for searching, copying, and inspecting.
+fn plain(value: &Value) -> String {
+    match value {
+        Value::Null => "NULL".into(),
+        Value::Integer(n) => n.to_string(),
+        Value::Real(x) => format!("{x:?}"),
+        Value::Decimal(digits) => digits.clone(),
+        Value::Text(text) => text.clone(),
+        Value::Blob(bytes) => format!("<blob {bytes} bytes>"),
+    }
 }
 
 /// How one value is shown: its text, whether it is right-aligned, its style.

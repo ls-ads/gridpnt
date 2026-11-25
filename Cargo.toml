@@ -8,6 +8,7 @@ repository = "https://github.com/ls-ads/gridpnt"
 homepage = "https://datapnt.com"
 
 [dependencies]
+getrandom = "0.2"
 ratatui = "0.30"
 rusqlite = { version = "0.43", features = ["bundled", "hooks"] }
 serde = { version = "1", features = ["derive"] }

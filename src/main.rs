@@ -5,7 +5,7 @@ use gridpnt::backend::Backend;
 use gridpnt::backend::databricks::{Databricks, auth};
 use gridpnt::backend::sqlite::Sqlite;
 use gridpnt::config::{self, Connection, Kind};
-use gridpnt::tui;
+use gridpnt::{remote, tui};
 
 const USAGE: &str = "\
 gridpnt — a terminal-native database tool
@@ -13,6 +13,9 @@ gridpnt — a terminal-native database tool
 Usage:
   gridpnt <connection>   open a connection from connections.ini
   gridpnt <file>         open a SQLite database file
+  gridpnt run [--to NAME] [FILE]
+                         send SQL (from FILE or standard input) to a
+                         running gridpnt, e.g. from an editor keymap
   gridpnt --help         show this help
   gridpnt --version      show the version
 
@@ -23,10 +26,22 @@ Keys:
   Ctrl-d Ctrl-u       half page           0 $     first / last column
   l / h  (catalog)    open / close        Enter   preview table
   Tab, Ctrl-w h/l     switch pane         :       run a query
-  Ctrl-c              cancel query        q       quit";
+  /  n  N             search              y  Y    copy cell / row
+  Ctrl-c              cancel query        ?       all keys
+  q                   quit";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+
+    if args.first().is_some_and(|arg| arg == "run") {
+        return match send(&args[1..]) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("gridpnt: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
 
     let target = match args.as_slice() {
         [flag] if flag == "--help" || flag == "-h" => {
@@ -71,6 +86,22 @@ fn open(target: &str) -> Result<(Box<dyn Backend>, Option<String>), String> {
         }
     };
     Ok((backend, env))
+}
+
+/// `gridpnt run [--to NAME] [FILE]`: send SQL to a running gridpnt.
+fn send(args: &[String]) -> Result<(), String> {
+    let (to, file) = match args {
+        [] => (None, None),
+        [file] if file != "--to" => (None, Some(file)),
+        [flag, name] if flag == "--to" => (Some(name.as_str()), None),
+        [flag, name, file] if flag == "--to" => (Some(name.as_str()), Some(file)),
+        _ => return Err("usage: gridpnt run [--to NAME] [FILE]".into()),
+    };
+    let sql = match file.filter(|file| *file != "-") {
+        Some(file) => std::fs::read_to_string(file).map_err(|e| format!("cannot read {file}: {e}"))?,
+        None => std::io::read_to_string(std::io::stdin()).map_err(|e| format!("cannot read standard input: {e}"))?,
+    };
+    remote::send(&sql, to)
 }
 
 fn print_connections() {
