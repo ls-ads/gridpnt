@@ -25,7 +25,9 @@ pub enum TokenSource {
     Fixed(String),
     /// Ask the Databricks CLI each time one is needed. These tokens expire
     /// after about an hour, so the client asks again when one is rejected.
-    Cli { host: String },
+    /// `profile` is the .databrickscfg profile to ask for, when there is
+    /// one for this host; the CLI finds a login by profile more reliably.
+    Cli { host: String, profile: Option<String> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,7 +85,12 @@ pub fn resolve(
     let source = match (profile_token, env_token) {
         (Some(token), _) => TokenSource::Fixed(token.to_string()),
         (None, Some(token)) => TokenSource::Fixed(token),
-        (None, None) => TokenSource::Cli { host: host.clone() },
+        (None, None) => TokenSource::Cli {
+            host: host.clone(),
+            profile: profile
+                .filter(|_| profile_host.as_ref() == Some(&host))
+                .map(|p| p.name.clone()),
+        },
     };
     Ok(Credentials { host, source })
 }
@@ -116,7 +123,7 @@ impl TokenSource {
     pub fn token(&self) -> Result<String> {
         match self {
             TokenSource::Fixed(token) => Ok(token.clone()),
-            TokenSource::Cli { host } => cli_token(host),
+            TokenSource::Cli { host, profile } => cli_token(host, profile.as_deref()),
         }
     }
 
@@ -130,17 +137,26 @@ struct CliToken {
     access_token: String,
 }
 
-fn cli_token(host: &str) -> Result<String> {
-    let how_to_fix = format!(
-        "no token for {host}. Either put one in ~/.databrickscfg, set DATABRICKS_TOKEN, \
-         or install the Databricks CLI and run: databricks auth login --host {host}"
-    );
+fn cli_token(host: &str, profile: Option<&str>) -> Result<String> {
+    let (flag, target) = match profile {
+        Some(profile) => ("--profile", profile),
+        None => ("--host", host),
+    };
+    let login = format!("databricks auth login {flag} {target}");
     let output = Command::new("databricks")
-        .args(["auth", "token", "--host", host])
+        .args(["auth", "token", flag, target, "--output", "json"])
         .output()
-        .map_err(|_| how_to_fix.clone())?;
+        .map_err(|_| {
+            format!(
+                "no token for {host}. Either put one in ~/.databrickscfg, set DATABRICKS_TOKEN, \
+                 or install the Databricks CLI and run: {login}"
+            )
+        })?;
     if !output.status.success() {
-        return Err(how_to_fix);
+        // Say what the CLI said: it knows why there is no token.
+        let said = String::from_utf8_lossy(&output.stderr);
+        let said = said.trim().trim_start_matches("Error: ");
+        return Err(format!("the Databricks CLI gave no token ({said}). Try: {login}"));
     }
     serde_json::from_slice::<CliToken>(&output.stdout)
         .map(|parsed| parsed.access_token)

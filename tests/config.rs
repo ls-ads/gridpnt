@@ -82,7 +82,13 @@ fn a_token_is_never_used_with_a_different_host() {
     let profiles = parse_ini(&format!("[DEFAULT]\nhost = {HOST}\ntoken = dapi123"));
     let other = "https://other.cloud.databricks.com";
     let found = resolve(&settings(Some(other), None), &no_env, &profiles).unwrap();
-    assert_eq!(found.source, TokenSource::Cli { host: other.into() });
+    assert_eq!(
+        found.source,
+        TokenSource::Cli {
+            host: other.into(),
+            profile: None
+        }
+    );
 
     // The same holds for a token in the environment that names its host.
     let env = |name: &str| match name {
@@ -91,7 +97,13 @@ fn a_token_is_never_used_with_a_different_host() {
         _ => None,
     };
     let found = resolve(&settings(Some(other), None), &env, &[]).unwrap();
-    assert_eq!(found.source, TokenSource::Cli { host: other.into() });
+    assert_eq!(
+        found.source,
+        TokenSource::Cli {
+            host: other.into(),
+            profile: None
+        }
+    );
 }
 
 #[test]
@@ -111,7 +123,13 @@ fn a_browser_login_profile_falls_back_to_the_cli() {
     // After `databricks auth login` the profile holds a host but no token.
     let profiles = parse_ini(&format!("[DEFAULT]\nhost = {HOST}\nauth_type = databricks-cli"));
     let found = resolve(&settings(None, None), &no_env, &profiles).unwrap();
-    assert_eq!(found.source, TokenSource::Cli { host: HOST.into() });
+    assert_eq!(
+        found.source,
+        TokenSource::Cli {
+            host: HOST.into(),
+            profile: Some("DEFAULT".into())
+        }
+    );
 }
 
 #[test]
