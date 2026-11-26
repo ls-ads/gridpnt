@@ -1,30 +1,17 @@
 //! Handing SQL to a running gridpnt from another process.
 
+#[path = "common/dir.rs"]
+mod dir;
+
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::mpsc;
 use std::time::Duration;
 
+use dir::Dir;
 use gridpnt::config::parse_ini;
 use gridpnt::remote::{Listener, listen_in, send_in};
-
-/// A private directory for one test, removed afterwards.
-struct Dir(PathBuf);
-
-impl Dir {
-    fn new(name: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!("gridpnt-test-remote-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        Dir(dir)
-    }
-}
-
-impl Drop for Dir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
 
 #[test]
 fn sql_reaches_the_running_instance() {

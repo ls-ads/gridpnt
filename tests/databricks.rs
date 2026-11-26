@@ -3,15 +3,20 @@
 //! reference; this proves gridpnt's side of the conversation, not that a
 //! real workspace behaves the same.
 
+#[path = "common/dir.rs"]
+mod dir;
+
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use dir::Dir;
 use gridpnt::backend::databricks::Databricks;
 use gridpnt::backend::databricks::auth::{Credentials, TokenSource};
 use gridpnt::backend::{Backend, Limits, NodeKind, Value};
-use gridpnt::exec;
+use gridpnt::cache::CatalogCache;
+use gridpnt::{exec, worker};
 use serde_json::{Value as Json, json};
 
 /// One request the pretend workspace received.
@@ -214,6 +219,77 @@ fn pinned_scopes_are_listed_without_asking_the_server() {
         ["finance", "sales"]
     );
     assert!(workspace.seen().is_empty());
+}
+
+/// A workspace that lists 10,000 tables in `main.sales`, over eleven pages,
+/// and answers nothing else.
+fn large_catalog_workspace() -> Workspace {
+    // Interleave the names across pages so simply appending each page gives the wrong display order.
+    let mut batches: Vec<Vec<usize>> = (1..=10).map(|first| (first..=10_000).step_by(10).collect()).collect();
+    // A page may be empty and still not be the last.
+    batches.insert(5, Vec::new());
+    let mut cursors = vec![String::new()];
+    cursors.extend((1..batches.len()).map(|page| format!("batch-{page}")));
+
+    Workspace::start(move |request, _| {
+        let query = request
+            .target
+            .strip_prefix("/api/2.1/unity-catalog/table-summaries?")
+            .unwrap_or("");
+        let fields: Vec<_> = query.split('&').collect();
+        if request.method != "GET"
+            || !fields.contains(&"catalog_name=main")
+            || !fields.contains(&"schema_name_pattern=sales")
+        {
+            return (404, json!({"message": "expected a listing scoped to main.sales"}));
+        }
+        let cursor = fields
+            .iter()
+            .find_map(|field| field.strip_prefix("page_token="))
+            .unwrap_or("");
+        let Some(page) = cursors.iter().position(|key| key == cursor) else {
+            return (400, json!({"message": "unknown page cursor"}));
+        };
+        let tables: Vec<_> = batches[page]
+            .iter()
+            .map(|id| json!({"full_name": format!("main.sales.table_{id:05}"), "table_type": "MANAGED"}))
+            .collect();
+        let mut reply = json!({"tables": tables});
+        if let Some(next) = cursors.get(page + 1) {
+            reply["next_page_token"] = json!(next);
+        }
+        (200, reply)
+    })
+}
+
+#[test]
+fn ten_thousand_pinned_tables_reopen_without_requests() {
+    let workspace = large_catalog_workspace();
+    let dir = Dir::new("large-catalog");
+    let file = dir.0.join("catalog.json");
+
+    for (run, expected_requests) in [("fresh", 11), ("reopened", 0)] {
+        let before = workspace.seen().len();
+        let mut backend = workspace.connect(&["main.sales"]);
+        let mut cache = CatalogCache::at(file.clone());
+        let mut browse =
+            |parts: &[&str]| worker::children(&mut backend, Some(&mut cache), &path(parts), false).unwrap();
+
+        assert_eq!(names(&browse(&[])), ["main"]);
+        assert_eq!(names(&browse(&["main"])), ["sales"]);
+        assert_eq!(workspace.seen().len(), before, "{run}: listing pinned parents");
+
+        let tables = browse(&["main", "sales"]);
+        assert_eq!(tables.len(), 10_000, "{run}: table count");
+        for (index, table) in tables.iter().enumerate() {
+            assert_eq!(table.name, format!("table_{:05}", index + 1), "{run}: index {index}");
+        }
+        assert_eq!(
+            workspace.seen().len() - before,
+            expected_requests,
+            "{run}: HTTP requests"
+        );
+    }
 }
 
 #[test]
