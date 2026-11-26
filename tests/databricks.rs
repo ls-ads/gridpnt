@@ -348,6 +348,7 @@ fn a_query_is_submitted_polled_and_read_chunk_by_chunk() {
     assert_eq!(body["warehouse_id"], "wh1");
     assert_eq!(body["wait_timeout"], "0s");
     assert_eq!(body["row_limit"], exec::ROW_CAP + 1);
+    assert_eq!(body["byte_limit"], 16 * 1024 * 1024);
 }
 
 #[test]
@@ -372,6 +373,74 @@ fn rows_beyond_the_cap_are_dropped_and_reported() {
     let result = exec::run_within(&mut databricks, "SELECT n FROM t", &limits).unwrap();
     assert_eq!(result.rows.len(), 2);
     assert!(result.truncated);
+}
+
+#[test]
+fn a_result_cut_short_by_its_size_is_marked_truncated() {
+    // Databricks stops at the byte limit and says so in the manifest.
+    let workspace = Workspace::start(|request, _| match request.method.as_str() {
+        "GET" => running_warehouse(),
+        _ => (
+            200,
+            json!({
+                "statement_id": "s1",
+                "status": {"state": "SUCCEEDED"},
+                "manifest": {"truncated": true, "schema": {"columns": [{"name": "n", "type_name": "INT"}]}},
+                "result": {"data_array": [["1"], ["2"]]},
+            }),
+        ),
+    });
+    let mut databricks = workspace.connect(&[]);
+    let result = exec::run(&mut databricks, "SELECT n FROM t").unwrap();
+    assert_eq!(result.rows.len(), 2);
+    assert!(result.truncated);
+}
+
+#[test]
+fn values_are_shown_as_their_declared_types() {
+    let workspace = Workspace::start(|request, _| match request.method.as_str() {
+        "GET" => running_warehouse(),
+        _ => (
+            200,
+            json!({
+                "statement_id": "s1",
+                "status": {"state": "SUCCEEDED"},
+                "manifest": {"schema": {"columns": [
+                    {"name": "ids", "type_name": "ARRAY", "type_text": "ARRAY<INT>"},
+                    {"name": "who", "type_name": "STRUCT",
+                     "type_text": "STRUCT<id: INT NOT NULL, name: STRING, seen: TIMESTAMP>"},
+                    {"name": "prices", "type_name": "MAP", "type_text": "MAP<STRING, DECIMAL(4,2)>"},
+                    {"name": "hash", "type_name": "BINARY", "type_text": "BINARY"},
+                    {"name": "odd", "type_name": "STRUCT", "type_text": "STRUCT<"},
+                    {"name": "far", "type_name": "DOUBLE", "type_text": "DOUBLE"},
+                ]}},
+                // As Databricks sends them: numbers quoted, fields in any order.
+                "result": {"data_array": [[
+                    r#"["1","2",null]"#,
+                    r#"{"name":"x","seen":"2024-01-01T00:00:00.000Z","id":"7"}"#,
+                    r#"{"tea":"9.50"}"#,
+                    "3q2+7w==",
+                    r#"{"a":"1"}"#,
+                    "Infinity",
+                ]]},
+            }),
+        ),
+    });
+    let mut databricks = workspace.connect(&[]);
+    let result = exec::run(&mut databricks, "SELECT 1").unwrap();
+    let text = |shown: &str| Value::Text(shown.into());
+    assert_eq!(
+        result.rows[0],
+        [
+            text("[1,2,null]"),
+            text(r#"{"id":7,"name":"x","seen":"2024-01-01 00:00:00"}"#),
+            text(r#"{"tea":9.50}"#),
+            text("X'DEADBEEF'"),
+            // A declaration gridpnt cannot read: shown as sent.
+            text(r#"{"a":"1"}"#),
+            Value::Real(f64::INFINITY),
+        ]
+    );
 }
 
 #[test]

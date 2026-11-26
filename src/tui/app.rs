@@ -26,6 +26,7 @@ Everywhere
   Tab            other pane             Ctrl-w h/l   catalog / result
   :              run a query            Ctrl-c   cancel the running query
   ?              this help              q        quit
+  g<             show a cut-off message in full
 
 Catalog
   l  h           open / close           Enter    preview table
@@ -35,7 +36,7 @@ Result
   h l  w b       left / right           0 $      first / last column
   Enter          show the whole cell    y  Y     copy cell / row
 
-Whole cell view
+Whole cell or message view
   j k            scroll                 y        copy
   q Esc Enter    close";
 
@@ -43,6 +44,8 @@ Whole cell view
 const MAX_YANK_BYTES: usize = 70_000;
 /// The most text the whole-cell view will lay out.
 const MAX_INSPECT_CHARS: usize = 200_000;
+/// Ends a status line message too long to fit, saying how to read the rest.
+const CUT_HINT: &str = " g< shows all";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Focus {
@@ -53,7 +56,8 @@ enum Focus {
 /// A key that is waiting for the key after it.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Pending {
-    /// `g` was pressed; `gg` jumps to the top.
+    /// `g` was pressed; `gg` jumps to the top and `g<` shows the status
+    /// line in full.
     G,
     /// `Ctrl-w` was pressed; `h`, `l`, or `w` chooses a pane.
     Window,
@@ -78,8 +82,9 @@ enum PromptKind {
 /// Something drawn over the panes until dismissed.
 enum Overlay {
     Help,
-    /// The whole of one cell, scrolled down by `scroll` lines.
-    Cell {
+    /// A whole cell or message, scrolled down by `scroll` lines.
+    Text {
+        title: &'static str,
         content: String,
         scroll: u16,
     },
@@ -245,6 +250,7 @@ impl App {
             (KeyCode::Char('d'), true) => self.move_rows(times * self.half_page()),
             (KeyCode::Char('u'), true) => self.move_rows(-times * self.half_page()),
             (KeyCode::Char('g'), false) if pending == Some(Pending::G) => self.move_to_row(0),
+            (KeyCode::Char('<'), false) if pending == Some(Pending::G) => self.show_status_note(),
             (KeyCode::Char('g'), false) => self.pending = Some(Pending::G),
             // `G` goes to the last row; `12G` goes to row 12.
             (KeyCode::Char('G'), false) => self.move_to_row(count.map_or(usize::MAX, |n| n.saturating_sub(1))),
@@ -305,7 +311,11 @@ impl App {
             KeyCode::Enter => {
                 if let Some(cell) = self.grid.current_cell() {
                     let content = text::clean_lines(&cell, MAX_INSPECT_CHARS);
-                    self.overlay = Some(Overlay::Cell { content, scroll: 0 });
+                    self.overlay = Some(Overlay::Text {
+                        title: "cell",
+                        content,
+                        scroll: 0,
+                    });
                 }
             }
             _ => {}
@@ -314,7 +324,7 @@ impl App {
 
     fn on_overlay_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let Some(Overlay::Cell { content, scroll }) = &mut self.overlay else {
+        let Some(Overlay::Text { content, scroll, .. }) = &mut self.overlay else {
             // Any key closes the help.
             self.overlay = None;
             return;
@@ -448,6 +458,19 @@ impl App {
         self.clipboard = Some(content);
     }
 
+    /// `g<`, as in vim: show in full what the status line says after its
+    /// badges, which a narrow screen may cut off.
+    fn show_status_note(&mut self) {
+        let title = if self.message.is_some() { "message" } else { "comment" };
+        let Some((note, _)) = self.status_note() else { return };
+        let content = text::clean_lines(note, MAX_INSPECT_CHARS);
+        self.overlay = Some(Overlay::Text {
+            title,
+            content,
+            scroll: 0,
+        });
+    }
+
     /// Queue a query unless one is already running. One at a time keeps
     /// the load on the database predictable.
     fn start_query(&mut self, request: Request, focus_result: bool) {
@@ -506,7 +529,7 @@ impl App {
 
         match &self.overlay {
             Some(Overlay::Help) => draw_overlay(frame, panes, &self.help_title, HELP, 0),
-            Some(Overlay::Cell { content, scroll }) => draw_overlay(frame, panes, "cell", content, *scroll),
+            Some(Overlay::Text { title, content, scroll }) => draw_overlay(frame, panes, title, content, *scroll),
             None => {}
         }
 
@@ -555,20 +578,35 @@ impl App {
             }
         }
 
-        // With nothing else to say, describe the catalog row under the
-        // cursor: its comment is too long to sit beside its name.
-        let comment = match self.focus {
-            Focus::Catalog => self.catalog.current_comment().map(|comment| (comment, theme::OVERLAY)),
-            Focus::Grid => None,
-        };
-        let message = self.message.as_ref().map(|(message, is_error)| {
-            let colour = if *is_error { theme::RED } else { theme::SUBTEXT };
-            (message.as_str(), colour)
-        });
-        if let Some((message, colour)) = message.or(comment) {
+        if let Some((note, style)) = self.status_note() {
             let room = right_edge.saturating_sub(x + 1) as usize;
-            let message = text::fit(&text::clean(message, room + 1), room);
-            buf.set_stringn(x, area.y, message, room, Style::new().fg(colour));
+            let note = text::clean(note, room + 1);
+            let hint = text::width(CUT_HINT);
+            if text::width(&note) > room && room >= hint + 10 {
+                // Too long to fit: show the start, and how to read the rest.
+                let start = text::fit(&note, room - hint);
+                let (after, _) = buf.set_stringn(x, area.y, start, room - hint, style);
+                buf.set_stringn(after, area.y, CUT_HINT, hint, Style::new().fg(theme::OVERLAY));
+            } else {
+                buf.set_stringn(x, area.y, text::fit(&note, room), room, style);
+            }
+        }
+    }
+
+    /// What the status line says after its badges: the latest message, or
+    /// with none, the comment on the catalog row under the cursor, which is
+    /// too long to sit beside its name.
+    fn status_note(&self) -> Option<(&str, Style)> {
+        if let Some((message, is_error)) = &self.message {
+            let colour = if *is_error { theme::RED } else { theme::SUBTEXT };
+            return Some((message.as_str(), Style::new().fg(colour)));
+        }
+        match self.focus {
+            Focus::Catalog => self
+                .catalog
+                .current_comment()
+                .map(|comment| (comment, Style::new().fg(theme::OVERLAY))),
+            Focus::Grid => None,
         }
     }
 }

@@ -14,6 +14,8 @@
 
 pub mod auth;
 pub mod client;
+mod nested;
+mod values;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -25,11 +27,19 @@ use serde_json::json;
 
 use self::auth::Credentials;
 use self::client::{Client, path_segment};
-use super::{Backend, Cancel, CatalogNode, Limits, NodeKind, Result, ResultSet, Value};
+use self::values::ColumnKind;
+use super::{Backend, Cancel, CatalogNode, Limits, NodeKind, Result, ResultSet};
 
 /// Upper bound on pages read for one listing, so a misbehaving server
 /// cannot keep gridpnt reading forever.
 const MAX_PAGES: usize = 500;
+
+/// The most result data asked for in one query. Above 25 MiB Databricks
+/// refuses to send a result inline at all; with this limit it sends the
+/// first part instead, marked as cut short, and gridpnt says so as it does
+/// for the row cap. The margin is there because Databricks measures the
+/// size in its own internal form, not as the JSON it sends.
+const RESULT_BYTE_LIMIT: u64 = 16 * 1024 * 1024;
 
 pub struct Databricks {
     client: Arc<Client>,
@@ -141,7 +151,10 @@ struct Schema {
 #[serde(default)]
 struct ResultColumn {
     name: String,
+    /// The short type name, such as `INT` or `STRUCT`.
     type_name: String,
+    /// The whole declaration, such as `STRUCT<id: INT, name: STRING>`.
+    type_text: String,
 }
 
 /// One piece of a result. Every value arrives as text, or null.
@@ -392,6 +405,7 @@ impl Backend for Databricks {
                 "disposition": "INLINE",
                 "format": "JSON_ARRAY",
                 "row_limit": limits.row_cap + 1,
+                "byte_limit": RESULT_BYTE_LIMIT,
             }),
         )?;
         *self.running.statement_id.lock().unwrap() = Some(submitted.statement_id.clone());
@@ -400,12 +414,12 @@ impl Backend for Databricks {
         *self.running.statement_id.lock().unwrap() = None;
         let finished = finished?;
 
-        let types: Vec<&str> = finished
+        let kinds: Vec<ColumnKind> = finished
             .manifest
             .schema
             .columns
             .iter()
-            .map(|c| c.type_name.as_str())
+            .map(|c| ColumnKind::of(&c.type_name, &c.type_text))
             .collect();
         let mut result = ResultSet {
             columns: finished
@@ -427,10 +441,7 @@ impl Backend for Databricks {
                     result.truncated = true;
                     return Ok(result);
                 }
-                let cells = row
-                    .into_iter()
-                    .zip(&types)
-                    .map(|(text, type_name)| value(text, type_name));
+                let cells = row.into_iter().zip(&kinds).map(|(text, kind)| kind.value(text));
                 result.rows.push(cells.collect());
             }
             match chunk.next_chunk_internal_link {
@@ -478,45 +489,4 @@ fn sorted(nodes: impl Iterator<Item = CatalogNode>) -> Vec<CatalogNode> {
 /// Quote a name so Databricks reads it as an identifier whatever it contains.
 fn quote_name(name: &str) -> String {
     format!("`{}`", name.replace('`', "``"))
-}
-
-/// Convert one cell from its text form using the column's type.
-fn value(text: Option<String>, type_name: &str) -> Value {
-    let Some(text) = text else { return Value::Null };
-    match type_name {
-        "BYTE" | "SHORT" | "INT" | "LONG" => text.parse().map(Value::Integer).unwrap_or(Value::Text(text)),
-        "FLOAT" | "DOUBLE" => text.parse().map(Value::Real).unwrap_or(Value::Text(text)),
-        "DECIMAL" => Value::Decimal(text),
-        "TIMESTAMP" | "TIMESTAMP_NTZ" => Value::Text(tidy_timestamp(text)),
-        _ => Value::Text(text),
-    }
-}
-
-/// Databricks sends `2016-02-13T21:47:53.000Z`; show `2016-02-13 21:47:53`.
-/// The `Z` only says the time is in UTC, which it always is here, and a
-/// fraction of all zeros says nothing. Anything unexpected is left alone.
-fn tidy_timestamp(text: String) -> String {
-    let Some((date, time)) = text.split_once('T') else {
-        return text;
-    };
-    let time = time.strip_suffix('Z').unwrap_or(time);
-    let time = match time.split_once('.') {
-        Some((seconds, fraction)) if fraction.bytes().all(|digit| digit == b'0') => seconds,
-        _ => time,
-    };
-    format!("{date} {time}")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn timestamps_are_tidied() {
-        let tidy = |text: &str| tidy_timestamp(text.to_string());
-        assert_eq!(tidy("2016-02-13T21:47:53.000Z"), "2016-02-13 21:47:53");
-        assert_eq!(tidy("2016-02-13T21:47:53.120Z"), "2016-02-13 21:47:53.120");
-        assert_eq!(tidy("2016-02-13T21:47:53.000"), "2016-02-13 21:47:53");
-        assert_eq!(tidy("not a timestamp"), "not a timestamp");
-    }
 }

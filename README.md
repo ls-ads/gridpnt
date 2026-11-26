@@ -48,6 +48,12 @@ corporate root certificate works with no setup. `HTTPS_PROXY` is honoured.
   table to re-read it.
 - **Cancel means cancel.** `Ctrl-c`, and the 10-minute timeout, cancel the
   statement on the warehouse.
+- **Big results are cut short, not refused.** gridpnt keeps the first
+  10,000 rows or about 16 MiB, whichever comes first, and the status line
+  says TRUNCATED.
+- **Arrays, maps and structs** are shown as JSON with numbers unquoted and
+  struct fields in their declared order. Binary values are shown as hex,
+  such as `X'DEADBEEF'`.
 - **Read-only is gridpnt's rule, not Databricks'.** gridpnt refuses
   anything but a single read statement, but Databricks has no read-only
   session to back that up. Use a token that can only read what you intend.
@@ -95,6 +101,7 @@ Press `?` inside gridpnt for the full list.
 | `Tab` or `Ctrl-w` `h`/`l` | switch pane |
 | `:` | run a query |
 | `Ctrl-c` | cancel a running query |
+| `g<` | show a cut-off message in full |
 | `q` | quit |
 
 Copying uses the terminal's clipboard (OSC 52), so it works over SSH.

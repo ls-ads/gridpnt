@@ -169,6 +169,7 @@ fn writes_are_refused_and_reported() {
     let mut s = Session::new(0);
     s.keys(":delete from people\n");
     assert!(s.status().contains("refused (read-only)"));
+    assert!(!s.status().contains("g< shows all")); // it fits, so no hint
     s.keys(":select count(*) from people\n");
     assert!(s.shows("3"));
 }
@@ -287,6 +288,33 @@ fn enter_in_the_grid_shows_the_whole_cell() {
     s.keys("q");
     assert!(!s.shows(&long));
     assert!(!s.app.quit); // q closed the cell view, not gridpnt
+}
+
+#[test]
+fn a_cut_off_message_can_be_read_in_full() {
+    let mut s = Session::new(0);
+    let table = format!("t_{}_end", "x".repeat(120));
+    s.keys(&format!(":select * from {table}\n"));
+    // Only the start fits, so the status line says how to see the rest.
+    assert!(s.status().contains("no such table"));
+    assert!(s.status().contains("g< shows all"));
+    assert!(!s.shows("_end"));
+
+    s.keys("g<");
+    assert!(s.shows("_end"));
+    s.keys("y");
+    assert!(s.app.take_clipboard().unwrap().contains("_end"));
+    s.keys("q");
+    assert!(!s.shows("_end"));
+    assert!(!s.app.quit); // q closed the message, not gridpnt
+}
+
+#[test]
+fn infinity_is_spelled_out() {
+    let mut s = Session::new(0);
+    s.keys(":select 1e999 as up, -1e999 as down\n");
+    assert!(s.shows("Infinity"));
+    assert!(s.shows("-Infinity"));
 }
 
 #[test]

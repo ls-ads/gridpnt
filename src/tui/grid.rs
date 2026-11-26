@@ -222,10 +222,21 @@ fn plain(value: &Value) -> String {
     match value {
         Value::Null => "NULL".into(),
         Value::Integer(n) => n.to_string(),
-        Value::Real(x) => format!("{x:?}"),
+        Value::Real(x) => real(*x),
         Value::Decimal(digits) => digits.clone(),
         Value::Text(text) => text.clone(),
         Value::Blob(bytes) => format!("<blob {bytes} bytes>"),
+    }
+}
+
+/// A floating-point number as text. Infinity is spelled out, as Databricks
+/// writes it, rather than as Rust's `inf`.
+fn real(x: f64) -> String {
+    if x.is_infinite() {
+        let sign = if x < 0.0 { "-" } else { "" };
+        format!("{sign}Infinity")
+    } else {
+        format!("{x:?}")
     }
 }
 
@@ -236,7 +247,7 @@ fn cell(value: &Value) -> (String, bool, Style) {
     match value {
         Value::Null => ("NULL".into(), false, dim),
         Value::Integer(n) => (n.to_string(), true, number),
-        Value::Real(x) => (format!("{x:?}"), true, number),
+        Value::Real(x) => (real(*x), true, number),
         Value::Decimal(digits) => (text::clean(digits, MAX_COLUMN_WIDTH + 1), true, number),
         Value::Text(s) => (
             text::clean(s, MAX_COLUMN_WIDTH + 1),
