@@ -72,14 +72,8 @@ fn handle(backend: &mut dyn Backend, cache: Option<&mut CatalogCache>, request: 
             let result = children(backend, cache, &path, refresh);
             Response::Children { path, result }
         }
-        Request::Preview { path } => match backend.preview_sql(&path) {
-            Some(sql) => run(backend, &sql),
-            None => Response::Ran {
-                result: Err("nothing to preview here".into()),
-                elapsed: Duration::ZERO,
-            },
-        },
-        Request::Run { sql } => run(backend, &sql),
+        Request::Preview { path } => timed(|| exec::preview(backend, &path)),
+        Request::Run { sql } => timed(|| exec::run(backend, &sql)),
     }
 }
 
@@ -101,9 +95,9 @@ pub fn children(
     Ok(fresh)
 }
 
-fn run(backend: &mut dyn Backend, sql: &str) -> Response {
+fn timed(query: impl FnOnce() -> Result<ResultSet>) -> Response {
     let started = Instant::now();
-    let result = exec::run(backend, sql);
+    let result = query();
     Response::Ran {
         result,
         elapsed: started.elapsed(),

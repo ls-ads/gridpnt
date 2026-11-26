@@ -126,7 +126,7 @@ impl Grid {
 
     /// One-line summary for the status bar, and whether the result was cut
     /// off by the row cap. Truncation must never go unnoticed. (GRID-004)
-    pub fn summary(&self) -> Option<(String, bool)> {
+    pub fn summary(&self) -> Option<(String, Option<usize>)> {
         let result = self.result.as_ref()?;
         let position = if result.rows.is_empty() {
             "0 rows".to_string()
@@ -139,7 +139,7 @@ impl Grid {
             result.columns.len(),
             self.elapsed.as_millis()
         );
-        Some((summary, result.truncated))
+        Some((summary, result.truncated.then_some(result.rows.len())))
     }
 
     pub fn draw(&mut self, area: Rect, buf: &mut Buffer, focused: bool) {

@@ -539,8 +539,8 @@ impl App {
         // goes in front of it in a colour that cannot be missed.
         let mut right_edge = area.right();
         if let Some((summary, truncated)) = self.grid.summary() {
-            let warning = if truncated { " TRUNCATED at row cap " } else { "" };
-            let needed = (text::width(&summary) + text::width(warning) + 1) as u16;
+            let warning = truncated.map_or(String::new(), |rows| format!(" TRUNCATED at {rows} rows "));
+            let needed = (text::width(&summary) + text::width(&warning) + 1) as u16;
             if needed < area.right().saturating_sub(x) {
                 right_edge = area.right() - needed;
                 let warn_style = Style::new()
@@ -552,8 +552,17 @@ impl App {
             }
         }
 
-        if let Some((message, is_error)) = &self.message {
+        // With nothing else to say, describe the catalog row under the
+        // cursor: its comment is too long to sit beside its name.
+        let comment = match self.focus {
+            Focus::Catalog => self.catalog.current_comment().map(|comment| (comment, theme::OVERLAY)),
+            Focus::Grid => None,
+        };
+        let message = self.message.as_ref().map(|(message, is_error)| {
             let colour = if *is_error { theme::RED } else { theme::SUBTEXT };
+            (message.as_str(), colour)
+        });
+        if let Some((message, colour)) = message.or(comment) {
             let room = right_edge.saturating_sub(x + 1) as usize;
             let message = text::fit(&text::clean(message, room + 1), room);
             buf.set_stringn(x, area.y, message, room, Style::new().fg(colour));

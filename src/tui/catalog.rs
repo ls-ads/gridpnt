@@ -57,6 +57,12 @@ impl Catalog {
         self.rows.get(self.cursor).map(|row| row.path.join("."))
     }
 
+    /// The comment on the catalog, schema, or table under the cursor.
+    pub fn current_comment(&self) -> Option<&str> {
+        let node = &self.rows.get(self.cursor)?.node;
+        (node.kind != NodeKind::Column && !node.detail.is_empty()).then_some(node.detail.as_str())
+    }
+
     /// Find the next row whose name matches `pattern`, looking forward or
     /// backward from the cursor and wrapping round. `include_current`
     /// decides whether the row under the cursor may itself be the answer.
@@ -209,7 +215,12 @@ impl Catalog {
             // Each piece is drawn where the previous one ended, clipped to
             // the pane's right edge.
             let name = text::clean(&row.node.name, area.width as usize);
-            let detail = text::clean(&row.node.detail, area.width as usize);
+            // Only a column's type sits beside its name. Comments on the
+            // rest are long, so the status line shows the selected one.
+            let detail = match row.node.kind {
+                NodeKind::Column => text::clean(&row.node.detail, area.width as usize),
+                _ => String::new(),
+            };
             let pieces = [
                 (format!("{indent}{marker}"), Style::new().fg(theme::OVERLAY)),
                 (name, name_style),

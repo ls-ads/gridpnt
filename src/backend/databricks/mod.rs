@@ -487,6 +487,36 @@ fn value(text: Option<String>, type_name: &str) -> Value {
         "BYTE" | "SHORT" | "INT" | "LONG" => text.parse().map(Value::Integer).unwrap_or(Value::Text(text)),
         "FLOAT" | "DOUBLE" => text.parse().map(Value::Real).unwrap_or(Value::Text(text)),
         "DECIMAL" => Value::Decimal(text),
+        "TIMESTAMP" | "TIMESTAMP_NTZ" => Value::Text(tidy_timestamp(text)),
         _ => Value::Text(text),
+    }
+}
+
+/// Databricks sends `2016-02-13T21:47:53.000Z`; show `2016-02-13 21:47:53`.
+/// The `Z` only says the time is in UTC, which it always is here, and a
+/// fraction of all zeros says nothing. Anything unexpected is left alone.
+fn tidy_timestamp(text: String) -> String {
+    let Some((date, time)) = text.split_once('T') else {
+        return text;
+    };
+    let time = time.strip_suffix('Z').unwrap_or(time);
+    let time = match time.split_once('.') {
+        Some((seconds, fraction)) if fraction.bytes().all(|digit| digit == b'0') => seconds,
+        _ => time,
+    };
+    format!("{date} {time}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timestamps_are_tidied() {
+        let tidy = |text: &str| tidy_timestamp(text.to_string());
+        assert_eq!(tidy("2016-02-13T21:47:53.000Z"), "2016-02-13 21:47:53");
+        assert_eq!(tidy("2016-02-13T21:47:53.120Z"), "2016-02-13 21:47:53.120");
+        assert_eq!(tidy("2016-02-13T21:47:53.000"), "2016-02-13 21:47:53");
+        assert_eq!(tidy("not a timestamp"), "not a timestamp");
     }
 }

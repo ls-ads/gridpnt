@@ -16,6 +16,11 @@ pub const ROW_CAP: usize = 10_000;
 /// run all night.
 pub const TIMEOUT: Duration = Duration::from_secs(600);
 
+/// The most rows fetched when a table is previewed from the catalog. A
+/// preview is a glance, so it should be quick and cheap; a typed query
+/// gets the full `ROW_CAP`.
+pub const PREVIEW_ROWS: usize = 1_000;
+
 pub const LIMITS: Limits = Limits {
     row_cap: ROW_CAP,
     timeout: TIMEOUT,
@@ -25,6 +30,16 @@ pub const LIMITS: Limits = Limits {
 /// there is no way to turn that off yet.
 pub fn run(backend: &mut dyn Backend, sql: &str) -> Result<ResultSet> {
     run_within(backend, sql, &LIMITS)
+}
+
+/// Show the first rows of the table or view at `path`.
+pub fn preview(backend: &mut dyn Backend, path: &[String]) -> Result<ResultSet> {
+    let sql = backend.preview_sql(path).ok_or("nothing to preview here")?;
+    let limits = Limits {
+        row_cap: PREVIEW_ROWS,
+        timeout: TIMEOUT,
+    };
+    run_within(backend, &sql, &limits)
 }
 
 /// `run` with explicit limits, for tests that need small ones.

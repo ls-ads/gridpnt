@@ -44,7 +44,8 @@ pub enum NodeKind {
 pub struct CatalogNode {
     pub name: String,
     pub kind: NodeKind,
-    /// Short extra text shown beside the name, such as a column's type.
+    /// Extra text about the entry: a column's type, shown beside its
+    /// name, or the comment on anything else, shown when it is selected.
     pub detail: String,
     pub has_children: bool,
 }

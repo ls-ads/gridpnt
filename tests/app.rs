@@ -50,10 +50,7 @@ impl Session {
                     let result = self.sqlite.children(&path);
                     Response::Children { path, result }
                 }
-                Request::Preview { path } => {
-                    let sql = self.sqlite.preview_sql(&path).unwrap();
-                    ran(exec::run(&mut self.sqlite, &sql))
-                }
+                Request::Preview { path } => ran(exec::preview(&mut self.sqlite, &path)),
                 Request::Run { sql } => ran(exec::run(&mut self.sqlite, &sql)),
             };
             self.app.on_response(response);
@@ -180,7 +177,17 @@ fn writes_are_refused_and_reported() {
 fn truncation_is_announced() {
     let mut s = Session::new(exec::ROW_CAP + 1);
     s.keys(":select n from numbers\n");
-    assert!(s.status().contains("TRUNCATED at row cap"));
+    assert!(s.status().contains(&format!("TRUNCATED at {} rows", exec::ROW_CAP)));
+}
+
+#[test]
+fn a_preview_fetches_fewer_rows_than_a_query() {
+    let mut s = Session::new(exec::PREVIEW_ROWS + 1);
+    s.keys("/numbers\n\n");
+    assert!(
+        s.status()
+            .contains(&format!("TRUNCATED at {} rows", exec::PREVIEW_ROWS))
+    );
 }
 
 #[test]
