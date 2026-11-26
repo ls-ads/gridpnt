@@ -2,12 +2,12 @@
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
 
 use gridpnt::config::parse_ini;
-use gridpnt::remote::{listen_in, send_in};
+use gridpnt::remote::{Listener, listen_in, send_in};
 
 /// A private directory for one test, removed afterwards.
 struct Dir(PathBuf);
@@ -106,4 +106,57 @@ fn a_name_that_matches_nothing_is_reported() {
     let error = send_in(&dir.0, "SELECT 1", Some("elsewhere")).unwrap_err();
     assert!(error.starts_with("no running gridpnt found"), "{error}");
     assert!(send_in(&dir.0, "SELECT 1", Some("work")).is_ok());
+}
+
+/// Give each listener its own PID in the shared directory, as it would have
+/// if the test had opened two terminals.
+fn announce_process(dir: &Path, pid: u32, label: &str) -> (Listener, mpsc::Receiver<String>) {
+    let own_dir = dir.join(pid.to_string());
+    let (delivered, inbox) = mpsc::channel();
+    let listener = listen_in(&own_dir, label, move |sql| delivered.send(sql).unwrap()).unwrap();
+    let file = own_dir.join(format!("{}.ini", std::process::id()));
+    std::fs::copy(file, dir.join(format!("{pid}.ini"))).unwrap();
+    (listener, inbox)
+}
+
+#[test]
+fn identically_named_instances_can_each_receive_a_query() {
+    let dir = Dir::new("duplicates");
+    let (_first, first) = announce_process(&dir.0, 101, "work");
+    let (_second, second) = announce_process(&dir.0, 202, "work");
+
+    for target in [None, Some("work")] {
+        let message = send_in(&dir.0, "SELECT 0", target).unwrap_err();
+        assert!(message.contains("--to pid:101"), "{message}");
+        assert!(message.contains("--to pid:202"), "{message}");
+    }
+    assert!(first.try_recv().is_err());
+    assert!(second.try_recv().is_err());
+
+    let (_other, other) = announce_process(&dir.0, 303, "sales");
+    let message = send_in(&dir.0, "SELECT 0", Some("work")).unwrap_err();
+    assert!(!message.contains("pid:303"), "{message}");
+    send_in(&dir.0, "SELECT 3", Some("sales")).unwrap();
+    assert_eq!(other.try_recv().unwrap(), "SELECT 3");
+    send_in(&dir.0, "SELECT 2", Some("pid:202")).unwrap();
+    send_in(&dir.0, "SELECT 1", Some("pid:101")).unwrap();
+    assert_eq!(first.try_recv().unwrap(), "SELECT 1");
+    assert_eq!(second.try_recv().unwrap(), "SELECT 2");
+    assert!(send_in(&dir.0, "SELECT 0", Some("pid:404")).is_err());
+    assert!(first.try_recv().is_err());
+    assert!(second.try_recv().is_err());
+}
+
+#[test]
+fn a_connection_name_that_looks_like_an_id_can_be_selected_literally() {
+    let dir = Dir::new("literal");
+    let (_first, first) = announce_process(&dir.0, 101, "pid:202");
+    let (_second, second) = announce_process(&dir.0, 202, "name:work");
+
+    send_in(&dir.0, "SELECT 1", Some("name:pid:202")).unwrap();
+    send_in(&dir.0, "SELECT 2", Some("pid:202")).unwrap();
+    send_in(&dir.0, "SELECT 3", Some("name:name:work")).unwrap();
+    assert_eq!(first.try_recv().unwrap(), "SELECT 1");
+    assert_eq!(second.try_recv().unwrap(), "SELECT 2");
+    assert_eq!(second.try_recv().unwrap(), "SELECT 3");
 }

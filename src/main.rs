@@ -13,9 +13,9 @@ gridpnt — a terminal-native database tool
 Usage:
   gridpnt <connection>   open a connection from connections.ini
   gridpnt <file>         open a SQLite database file
-  gridpnt run [--to NAME] [FILE]
+  gridpnt run [--to TARGET] [FILE]
                          send SQL (from FILE or standard input) to a
-                         running gridpnt, e.g. from an editor keymap
+                         running gridpnt by connection name or pid:NUMBER
   gridpnt --help         show this help
   gridpnt --version      show the version
 
@@ -88,14 +88,14 @@ fn open(target: &str) -> Result<(Box<dyn Backend>, Option<String>), String> {
     Ok((backend, env))
 }
 
-/// `gridpnt run [--to NAME] [FILE]`: send SQL to a running gridpnt.
+/// `gridpnt run [--to TARGET] [FILE]`: send SQL to a running gridpnt.
 fn send(args: &[String]) -> Result<(), String> {
     let (to, file) = match args {
         [] => (None, None),
         [file] if file != "--to" => (None, Some(file)),
-        [flag, name] if flag == "--to" => (Some(name.as_str()), None),
-        [flag, name, file] if flag == "--to" => (Some(name.as_str()), Some(file)),
-        _ => return Err("usage: gridpnt run [--to NAME] [FILE]".into()),
+        [flag, target] if flag == "--to" => (Some(target.as_str()), None),
+        [flag, target, file] if flag == "--to" => (Some(target.as_str()), Some(file)),
+        _ => return Err("usage: gridpnt run [--to TARGET] [FILE]".into()),
     };
     let sql = match file.filter(|file| *file != "-") {
         Some(file) => std::fs::read_to_string(file).map_err(|e| format!("cannot read {file}: {e}"))?,

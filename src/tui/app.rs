@@ -95,6 +95,8 @@ pub struct App {
     grid: Grid,
     prompt: Option<Prompt>,
     overlay: Option<Overlay>,
+    /// Includes the target ID when the editor listener is available.
+    pub(super) help_title: String,
     /// The last search, repeated by `n` and `N`.
     last_search: Option<String>,
     /// Latest note for the status line, and whether it is an error.
@@ -122,6 +124,7 @@ impl App {
             grid: Grid::default(),
             prompt: None,
             overlay: None,
+            help_title: "keys".into(),
             last_search: None,
             message: None,
             running: false,
@@ -502,7 +505,7 @@ impl App {
             .draw(grid_inner, frame.buffer_mut(), self.focus == Focus::Grid);
 
         match &self.overlay {
-            Some(Overlay::Help) => draw_overlay(frame, panes, "keys", HELP, 0),
+            Some(Overlay::Help) => draw_overlay(frame, panes, &self.help_title, HELP, 0),
             Some(Overlay::Cell { content, scroll }) => draw_overlay(frame, panes, "cell", content, *scroll),
             None => {}
         }

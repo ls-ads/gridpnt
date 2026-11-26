@@ -54,14 +54,20 @@ corporate root certificate works with no setup. `HTTPS_PROXY` is honoured.
 
 ## Run SQL from your editor
 
-Keep gridpnt in one pane and your editor in another. `gridpnt run` sends
-SQL to the running gridpnt:
+Open gridpnt in one terminal and send SQL from your editor or another terminal.
 
 ```
 echo 'select 1' | gridpnt run
 gridpnt run query.sql
-gridpnt run --to work query.sql    # when several gridpnt are running
+gridpnt run --to work query.sql       # choose a connection by its displayed name
+gridpnt run --to pid:12345 query.sql  # choose a particular running copy
 ```
+
+Press `?` in gridpnt to see the ID for that run. If a connection name itself
+starts with `pid:` or `name:`, prefix it with `name:` to use it literally.
+When several copies match, `gridpnt run` lists their `--to` choices and
+exits without sending SQL. Inside tmux it first checks the caller's window
+and sends to a matching copy there if there is exactly one.
 
 For Neovim:
 

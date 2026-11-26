@@ -40,13 +40,16 @@ pub fn run(backend: Box<dyn Backend>, env: Option<String>) -> io::Result<()> {
 
     // Accept statements from `gridpnt run`. If listening is not possible
     // gridpnt still works; only the editor hand-off is unavailable.
-    let _listener = {
+    let listener = {
         let sender = sender.clone();
         remote::listen(&label, move |sql| {
             let _ = sender.send(Message::Remote(sql));
         })
         .ok()
     };
+    if listener.is_some() {
+        app.help_title = format!("keys | --to {}", remote::target_id(std::process::id()));
+    }
 
     let worker = {
         let sender = sender.clone();

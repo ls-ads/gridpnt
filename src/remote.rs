@@ -12,6 +12,8 @@
 //! through the guard, and nothing is sent back but "sent" or a refusal.
 //! Results stay on the gridpnt screen.
 
+mod tmux;
+
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -63,7 +65,10 @@ pub fn listen_in(dir: &Path, label: &str, deliver: impl Fn(String) + Send + 'sta
     let secret: String = secret.iter().map(|byte| format!("{byte:02x}")).collect();
 
     let file = dir.join(format!("{}.ini", std::process::id()));
-    let announcement = format!("[instance]\nlabel = {label}\nport = {port}\nsecret = {secret}\n");
+    let mut announcement = format!("[instance]\nlabel = {label}\nport = {port}\nsecret = {secret}\n");
+    if let Some(pane) = tmux::current_pane() {
+        announcement.push_str(&format!("tmux_pane = {pane}\n"));
+    }
     write_private(dir, &file, &announcement).map_err(|e| format!("cannot write {}: {e}", file.display()))?;
 
     thread::spawn(move || {
@@ -127,9 +132,15 @@ fn same(a: &[u8], b: &[u8]) -> bool {
 
 /// An instance found on disk and confirmed to be answering.
 struct Instance {
+    pid: u32,
     label: String,
+    tmux_pane: String,
     secret: String,
     stream: TcpStream,
+}
+
+pub(crate) fn target_id(pid: u32) -> String {
+    format!("pid:{pid}")
 }
 
 /// Send `sql` to a running gridpnt, from the default place.
@@ -138,26 +149,10 @@ pub fn send(sql: &str, to: Option<&str>) -> Result<(), String> {
     send_in(&dir, sql, to)
 }
 
-/// Send `sql` to the running gridpnt announced in `dir`. With several
-/// running, `to` picks one by connection name.
+/// Send `sql` to one instance announced in `dir`. A target can be a
+/// connection name or a specific running process.
 pub fn send_in(dir: &Path, sql: &str, to: Option<&str>) -> Result<(), String> {
-    let mut found: Vec<Instance> = instances(dir)
-        .into_iter()
-        .filter(|instance| to.is_none_or(|wanted| instance.label == wanted))
-        .collect();
-
-    let mut instance = match found.len() {
-        0 => return Err("no running gridpnt found; start one in another pane first".into()),
-        1 => found.remove(0),
-        _ => {
-            let labels: Vec<&str> = found.iter().map(|i| i.label.as_str()).collect();
-            return Err(format!(
-                "several gridpnt are running ({}); pick one with --to NAME",
-                labels.join(", ")
-            ));
-        }
-    };
-
+    let mut instance = choose_instance(instances(dir), to)?;
     let failed = |e: std::io::Error| format!("could not talk to gridpnt: {e}");
     instance
         .stream
@@ -168,6 +163,39 @@ pub fn send_in(dir: &Path, sql: &str, to: Option<&str>) -> Result<(), String> {
     instance.stream.read_to_string(&mut reply).map_err(failed)?;
 
     if reply == "sent" { Ok(()) } else { Err(reply) }
+}
+
+fn choose_instance(mut found: Vec<Instance>, to: Option<&str>) -> Result<Instance, String> {
+    if let Some(target) = to {
+        if let Some(pid) = target.strip_prefix("pid:").and_then(|s| s.parse::<u32>().ok()) {
+            found.retain(|instance| instance.pid == pid);
+        } else {
+            let name = target.strip_prefix("name:").unwrap_or(target);
+            found.retain(|instance| instance.label == name);
+        }
+    }
+    match found.len() {
+        0 => {
+            return Err(match to {
+                Some(target) => format!("no running gridpnt found for --to {target:?}"),
+                None => "no running gridpnt found. Open gridpnt in another terminal first.".into(),
+            });
+        }
+        1 => return Ok(found.swap_remove(0)),
+        _ => {}
+    }
+
+    let panes: Vec<_> = found.iter().map(|instance| instance.tmux_pane.as_str()).collect();
+    if let Some(index) = tmux::in_caller_window(&panes) {
+        return Ok(found.swap_remove(index));
+    }
+
+    found.sort_unstable_by_key(|instance| instance.pid);
+    let mut message = String::from("several gridpnt are running. Choose one with --to");
+    for instance in found {
+        message.push_str(&format!("\n  --to {}  ({:?})", target_id(instance.pid), instance.label));
+    }
+    Err(message)
 }
 
 /// Every announced instance that still answers. Files left behind by a
@@ -181,17 +209,27 @@ fn instances(dir: &Path) -> Vec<Instance> {
         if file.extension().is_none_or(|ext| ext != "ini") {
             continue;
         }
-        let text = std::fs::read_to_string(&file).unwrap_or_default();
+        // The PID has always been the filename, including for older instances.
+        let Some(pid) = file.file_stem().and_then(|s| s.to_str()).and_then(|s| s.parse().ok()) else {
+            continue;
+        };
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            continue;
+        };
         let sections = config::parse_ini(&text);
         let field = |key: &str| sections.first().and_then(|s| s.get(key)).unwrap_or("").to_string();
-        let port: u16 = field("port").parse().unwrap_or(0);
+        let Ok(port) = field("port").parse::<u16>() else {
+            continue;
+        };
 
         let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
         match TcpStream::connect_timeout(&address, Duration::from_millis(500)) {
             Ok(stream) => {
                 let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
                 live.push(Instance {
+                    pid,
                     label: field("label"),
+                    tmux_pane: field("tmux_pane"),
                     secret: field("secret"),
                     stream,
                 });
